@@ -67,7 +67,7 @@ cost_projection.yaml
 Instalar dependencias:
 
 ```powershell
-cd C:\Users\josen\OneDrive\Desktop\airline-project
+cd C:\airline-project
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
@@ -92,14 +92,14 @@ AWS.
 Terminal 1, backend:
 
 ```powershell
-cd C:\Users\josen\OneDrive\Desktop\airline-project\backend
+cd C:\airline-project\backend
 ..\.venv\Scripts\python.exe -m uvicorn app.main:app --host :: --port 8000 --reload
 ```
 
 Terminal 2, frontend:
 
 ```powershell
-cd C:\Users\josen\OneDrive\Desktop\airline-project\frontend
+cd C:\airline-project\frontend
 python -m http.server 5500 --bind 127.0.0.1
 ```
 
@@ -117,7 +117,7 @@ Windows puede resolverlo primero mediante IPv6.
 Con backend y frontend ejecutándose:
 
 ```powershell
-cd C:\Users\josen\OneDrive\Desktop\airline-project\backend
+cd C:\airline-project\backend
 pytest tests/test_r1_latency.py -v -s
 pytest tests/test_concurrency.py -v -s
 pytest tests/test_e2e_frontend.py -v -s
