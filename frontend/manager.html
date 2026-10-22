@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel gerencial - Ocupación por ruta</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="page-shell manager-shell">
+    <nav class="topbar" aria-label="Navegación principal">
+      <a class="brand" href="index.html"><span class="brand-mark">A</span> Airline</a>
+      <div class="nav-links">
+        <a class="nav-link" href="index.html">Vuelos y reservas</a>
+        <a class="nav-link active" href="manager.html">Panel gerencial</a>
+      </div>
+    </nav>
+    <header class="hero">
+      <p class="eyebrow">Airline Analytics</p>
+      <h1>Panel gerencial</h1>
+      <p class="hero-copy">Consulta la ocupación de tus rutas por mes y toma decisiones con datos reales.</p>
+    </header>
+
+  <section class="card search-card">
+    <div class="manager-form">
+      <label>Ruta
+        <input data-testid="manager-route" type="text" placeholder="BOG-MDE" required>
+      </label>
+      <label>Mes
+        <input data-testid="manager-month" type="month" placeholder="2024-01" required>
+      </label>
+      <button class="button button-primary" data-testid="manager-load" type="button">Cargar datos</button>
+    </div>
+  </section>
+
+  <section class="card metric-card">
+    <p class="eyebrow">Indicador principal</p>
+    <h2>Ocupación</h2>
+    <div data-testid="occupancy-value" class="metric-value">—</div>
+    <p id="manager-summary" class="metric-summary">Selecciona una ruta y un mes para consultar.</p>
+  </section>
+
+  <p id="manager-error" class="message message-error" role="alert"></p>
+  </main>
+
+  <script src="js/manager.js"></script>
+</body>
+</html>

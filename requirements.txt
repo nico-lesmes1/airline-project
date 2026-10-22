@@ -1,0 +1,7 @@
+fastapi
+psycopg2-binary
+uvicorn
+pytest
+requests
+playwright
+boto3
