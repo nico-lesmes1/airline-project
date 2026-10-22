@@ -15,10 +15,10 @@ def create_flight(flight: FlightIn):
             INSERT INTO flights (flight_id, route, flight_date, capacity, price_cent)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (flight_id) DO NOTHING
-            RETURNING flight_id, route, flight_date, capacity, price_cent
+            RETURNING flight_id, route, flight_date, capacity, price_cent AS price_cents
             """,
             (flight.flight_id, flight.route, flight.flight_date,
-             flight.capacity, flight.price_cent),
+             flight.capacity, flight.price_cents),
         )
         row = cur.fetchone()
         conn.commit()
