@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Credenciales y configuración local
+.aws/
+credentials
+config.local.yaml
+.env
+*.pem
+
+# Reportes del harness
+report.json
+report.md
+
+# Datos crudos y muestras
+raw/
+raw_sample/
+data/
+
+# OS
+.DS_Store
+Thumbs.db
