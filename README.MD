@@ -1,4 +1,4 @@
-# Airline Reservation System
+# Sistema de reserva aerolínea 
 
 Sistema de reservas aéreas con API FastAPI, PostgreSQL y frontend web estático.
 El panel gerencial puede trabajar en modo local contra PostgreSQL o en modo AWS
