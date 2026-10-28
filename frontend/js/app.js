@@ -1,5 +1,5 @@
 // Cambia esta URL si sirves el backend desde otro host/puerto
-const API = window.AIRLINE_API_URL || "http://localhost:8000";
+const API = window.AIRLINE_API_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
 
 let selectedFlightId = null;
 
@@ -8,6 +8,9 @@ function addReserveListeners() {
     btn.addEventListener("click", () => {
       selectedFlightId = btn.getAttribute("data-flight-id");
       document.getElementById("selected-flight-id").textContent = selectedFlightId;
+      const flight = btn.closest('[data-testid="flight-row"]');
+      document.getElementById("reservation-summary").textContent =
+        `Reserva seleccionada: ${flight.querySelector(".flight-route").textContent} · ${flight.querySelector(".flight-meta").textContent}`;
       document.getElementById("reserve-panel").hidden = false;
       document.getElementById("confirmation").hidden = true;
       document.getElementById("reserve-error").textContent = "";
@@ -36,6 +39,11 @@ function renderFlightCards(flights, target, emptyMessage) {
       <button class="button button-primary" data-testid="reserve-button" data-flight-id="${f.flight_id}">Reservar</button>
     `;
     target.appendChild(row);
+    row.addEventListener("click", (event) => {
+      if (!event.target.closest('[data-testid="reserve-button"]')) {
+        row.querySelector('[data-testid="reserve-button"]').click();
+      }
+    });
   });
   addReserveListeners();
 }
@@ -78,6 +86,11 @@ document.getElementById("search-form").addEventListener("submit", async (e) => {
 
 document.getElementById("refresh-catalog").addEventListener("click", loadCatalog);
 loadCatalog();
+
+const dateInput = document.querySelector('[data-testid="search-date"]');
+if (dateInput) {
+  dateInput.title = "Los vuelos operacionales disponibles están cargados en el catálogo.";
+}
 
 document.querySelector('[data-testid="confirm-submit"]').addEventListener("click", async () => {
   const passengerName = document.querySelector('[data-testid="passenger-name"]').value.trim();

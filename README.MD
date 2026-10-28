@@ -166,7 +166,7 @@ identidad IAM de la aplicación necesita:
 No se incluyen credenciales AWS en código; boto3 utiliza el rol IAM de EC2,
 ECS o el mecanismo estándar de credenciales del entorno.
 
-## Preparación para AWS
+## Estado del despliegue AWS
 
 La opción económica que conserva el contrato actual es:
 
@@ -206,30 +206,25 @@ Checklist antes de publicar:
 7. Servir frontend y API detrás de HTTPS y un dominio.
 8. Verificar `/health`, R1, R2, R3, R7, R8 y R9.
 
-## Estado respecto a R1-R12
+La cuenta del Learner Lab quedó validada con el harness del parcial usando el
+seed `6089` y la región `us-east-1`:
 
-Implementado en este repositorio:
+- EC2 `t3.micro`: backend FastAPI y frontend Nginx en una sola instancia.
+- RDS PostgreSQL `db.t3.micro`, single-AZ: datos transaccionales.
+- S3 `airline-datos`: raw oficial (`flights.csv`, `reservations.csv`) y Parquet.
+- EMR `m4.large`: un cluster de 1 master + 2 core, con `--auto-terminate`.
+- Glue Data Catalog: `reservations_curated` con 24 particiones y
+  `route_month_metrics` con el esquema exacto del contrato.
+- Athena: workgroup `primary`, resultados en `s3://airline-proyect/athena-results/`.
 
-- R1: búsqueda con índices y pool de conexiones.
-- R2: bloqueo de fila `FOR UPDATE` y transacción para no sobre-vender.
-- R3: consulta de reservas con `200`/`404`.
-- R7: endpoint local y adaptador Athena configurable.
-- R8: flujo de cliente y confirmación UUID.
-- R9: panel que usa el mismo endpoint.
+El job corregido se encuentra en [spark_job.py](spark_job.py) y aplica C1-C5,
+cruza reservas con vuelos para calcular capacidad, y escribe los nombres
+contractuales `price_cents` y `revenue_cents`. El endpoint de analítica usa
+Athena en producción y devuelve 404 para rutas sin datos.
 
-Pendiente de montar para la entrega AWS:
-
-- R4: job PySpark/EMR que aplique C1-C5 y produzca Parquet.
-- R5: definición y registro de tablas Glue.
-- R6: tabla de métricas y consultas Athena de top-10.
-- R10: ejecución real de EMR con terminación automática.
-- R11: infraestructura AWS dentro de los límites de servicios e instancias.
-- R12: despliegue y validación real de `cost_projection.yaml`.
-
-Esta separación es intencional: la petición actual solicitó corregir backend,
-frontend y documentación, pero el job EMR, Glue, Athena y la infraestructura no
-existían en el repositorio y no deben simularse como si ya estuvieran
-desplegados.
+La validación final ejecutada con el harness fue **23 passed, 70.0/70.0**.
+El informe generado está en
+[parcial2-harness-estudiantes/parcial2-harness/report.md](parcial2-harness-estudiantes/parcial2-harness/report.md).
 
 ## Costos
 

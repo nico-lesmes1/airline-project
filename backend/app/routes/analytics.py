@@ -41,7 +41,7 @@ def _athena_occupancy(route: str, month: str):
             if state == "SUCCEEDED":
                 results = client.get_query_results(QueryExecutionId=execution_id)["ResultSet"]["Rows"]
                 if len(results) < 2:
-                    raise HTTPException(status_code=404, detail="analytics data not found")
+                    return None
                 values = [item.get("VarCharValue") for item in results[1]["Data"]]
                 return {
                     "route": values[0],
@@ -75,7 +75,10 @@ def occupancy(
 
     normalized_route = route.strip().upper()
     if os.getenv("ANALYTICS_BACKEND", "postgres").lower() == "athena":
-        return _athena_occupancy(normalized_route, month)
+        result = _athena_occupancy(normalized_route, month)
+        if result is None:
+            raise HTTPException(status_code=404, detail="analytics data not found")
+        return result
 
     conn = get_connection()
     try:

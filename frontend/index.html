@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <title>Airline - Buscar y reservar</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
   <main class="page-shell">
     <nav class="topbar" aria-label="Navegación principal">
-      <a class="brand" href="index.html"><span class="brand-mark">A</span> Airline</a>
+      <a class="brand" href="index.html"><span class="brand-mark">A</span> Vuelos</a>
       <div class="nav-links">
         <a class="nav-link active" href="index.html">Vuelos y reservas</a>
         <a class="nav-link" href="manager.html">Panel gerencial</a>
       </div>
     </nav>
     <header class="hero">
-      <p class="eyebrow">Airline</p>
-      <h1>Encuentra tu próximo vuelo</h1>
-      <p class="hero-copy">Busca rutas disponibles y reserva tu asiento en pocos pasos.</p>
+      <p class="eyebrow">RESERVAS</p>
+      <h1>Vuela con claridad.</h1>
+      <p class="hero-copy">Encuentra un vuelo, revisa su disponibilidad y confirma tu asiento en minutos.</p>
     </header>
 
   <section class="card search-card">
@@ -40,7 +40,7 @@
       <div>
         <p class="eyebrow">Planifica tu viaje</p>
         <h2>Vuelos disponibles</h2>
-        <p class="section-copy">Consulta los vuelos con asientos disponibles y elige tu clase al reservar.</p>
+        <p class="section-copy">Consulta fecha, precio y asientos antes de elegir. Los vuelos mostrados ya tienen disponibilidad.</p>
       </div>
       <button id="refresh-catalog" class="button button-secondary" type="button">Actualizar</button>
     </div>
@@ -65,6 +65,7 @@
       </div>
       <span id="selected-flight-id" class="badge"></span>
     </div>
+    <p id="reservation-summary" class="reservation-summary"></p>
     <label>Nombre del pasajero
       <input data-testid="passenger-name" type="text" required>
     </label>

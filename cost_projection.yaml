@@ -1,17 +1,17 @@
-assumptions: "Un backend/frontend en EC2 pequeño, RDS single-AZ, un procesamiento EMR mensual y consultas Athena de bajo volumen; detener recursos fuera de las sesiones de trabajo."
+assumptions: "Una EC2 t3.micro y un RDS db.t3.micro single-AZ activos durante el mes; EMR se ejecuta una vez y se termina automáticamente; Athena y S3 tienen bajo volumen."
 line_items:
   - service: "RDS"
-    detail: "PostgreSQL db.t4g.micro, 20 GB, single-AZ"
-    monthly_usd: 14.0
+    detail: "PostgreSQL db.t3.micro, single-AZ"
+    monthly_usd: 12.41
   - service: "EC2"
-    detail: "t3.small para backend y frontend"
-    monthly_usd: 15.2
+    detail: "t3.micro para backend y frontend"
+    monthly_usd: 7.59
   - service: "S3"
     detail: "CSV raw, Parquet curado y resultados Athena"
-    monthly_usd: 1.0
+    monthly_usd: 0.01
   - service: "Athena"
-    detail: "Consultas del panel sobre Parquet particionado por mes"
-    monthly_usd: 0.5
+    detail: "Consultas del panel sobre Parquet"
+    monthly_usd: 0.01
   - service: "EMR"
-    detail: "Una ejecución mensual con m4.large, dimensionada al dataset y terminación automática"
-    monthly_usd: 1.0
+    detail: "Una ejecución mensual con 3 x m4.large, 12 normalized instance-hours y terminación automática"
+    monthly_usd: 0.36
