@@ -1,226 +1,287 @@
-# Parcial 3 — Implementación de Persona A
+# Parcial 3 — Persona A: eventos, vista en vivo y landing zone
 
-## Alcance
+Este documento describe lo que implementa Persona A, cómo se relaciona con
+R1–R4 y R11, y el orden para comprobarlo. No incluye el ETL ni el esquema en
+estrella de Persona B. La semilla del equipo es **6089**.
 
-Este documento describe la parte de eventos y camino rápido del parcial 3:
-publicar búsquedas, reservas y cancelaciones en Kinesis; calcular la vista
-operacional desde un consumidor del stream; aterrizar los eventos en S3;
-añadir cancelación y las rutas de administración; y validar que el stream
-cumple R11.
+> **Estado de validación de esta revisión:** `backend/tests/test_partial3_events.py`
+> pasó: **5 passed** usando un entorno Python temporal y
+> `DB_POOL_MIN=0`/`DB_POOL_MAX=1` (los casos sustituyen la conexión a la base).
+> AWS CLI no está disponible en este entorno, así que no se ejecutaron el
+> harness contra AWS ni consultas a la cuenta. Las cifras de ejecuciones
+> anteriores que aparecían aquí siguen siendo históricas; vuelve a generar los
+> informes siguiendo [la guía de consola](./GUIA-EJECUCION-PARCIAL3-CONSOLA.md)
+> antes de afirmar resultados AWS actuales.
 
-El star schema y su ETL (R5–R10, además del trabajo de datos requerido por R8)
-no se incluyen en esta parte. Las rutas de refresh delegan a un AWS Glue job
-configurado por `GLUE_STAR_JOB_NAME`; ese job debe ser implementado y
-desplegado en la parte de star schema.
+## Alcance y dependencias
 
-## Flujo implementado
+| Requisito | Responsabilidad de Persona A | Estado observable en el repositorio |
+|---|---|---|
+| R1 | Contrato de eventos y publicación desde búsquedas, reservas y cancelaciones | Implementado en `backend/app/events.py` y las rutas FastAPI |
+| R2 | Envío asíncrono para no bloquear búsquedas y manejo de ráfagas | Publicación en `ThreadPoolExecutor`; la comprobación de latencia y pérdida requiere ejecutar el harness |
+| R3 | Consumidor de Kinesis, vista por tiempo del evento y conversión | Implementado en `backend/app/live_view.py` y `/analytics/live`; el umbral de 10 s requiere harness |
+| R4 | Entrega de eventos JSON a S3 dentro de 5 minutos | Depende de Firehose u otro delivery configurado en AWS; el repositorio no crea Firehose ni el bucket |
+| R11 | Stream provisionado mínimo | Scripts `infra/create_stream.sh` y `infra/delete_stream.sh`; el estado desplegado requiere AWS CLI/harness |
+| R8 (integración con B) | Rutas HTTP para iniciar y consultar refresh | Adaptador a Glue implementado; solo funciona si Persona B despliega/configura el Glue job |
 
-```text
-Navegador
-   |
-   v
-FastAPI
-   |-- GET /flights/search
-   |       `-- crea search_performed (session_id como partition key)
-   |
-   |-- POST /reservations
-   |       `-- confirma transacción y crea reservation_created
-   |
-   `-- POST /reservations/{id}/cancel
-           `-- cancela transacción y crea reservation_cancelled
-                  |
-                  v
-          Publicador Kinesis
-          (cola en proceso + timeout/retries SDK)
-                  |
-                  v
-          Kinesis Data Stream
-             |             \
-             |              `--> Firehose --> S3 (JSON gzip)
-             |
-             `--> consumidor de polling
-                    |
-                    v
-              PostgreSQL live_stream_events
-              (event_id único, event_ts indexado)
-                    |
-                    v
-              GET /analytics/live
+R8 y R5–R10 no se deben presentar como trabajo completado por Persona A: el
+job que transforma la landing zone al star schema pertenece a Persona B. En
+ausencia de `GLUE_STAR_JOB_NAME`, `POST /admin/refresh-star` devuelve 503 de
+forma explícita; no simula que el ETL haya empezado.
+
+## Qué se hizo, paso a paso
+
+### 1. Se definió un único contrato de eventos
+
+`backend/app/events.py` construye un envoltorio JSON común con `event_id`
+UUID, `event_type`, `event_ts` UTC con precisión de segundos y
+`schema_version: 1`. Los tipos admitidos son `search_performed`,
+`reservation_created` y `reservation_cancelled`.
+
+| Tipo | Campos propios | Partition key de Kinesis |
+|---|---|---|
+| `search_performed` | `session_id`, `origin`, `destination`, `travel_date`, `results_count` | `session_id` |
+| `reservation_created` | `reservation_id`, `flight_id`, `route`, `flight_date`, `fare_class`, `price_cents` | `flight_id` |
+| `reservation_cancelled` | Los mismos datos de la reserva original | `flight_id` |
+
+En una búsqueda, `/flights/search` toma `X-Session-Id`; si el header no llega,
+genera un identificador de sesión. El evento no lleva el nombre del pasajero
+ni otros datos personales. La fecha del evento se genera al producirse la
+acción, no al recibirla posteriormente el consumidor.
+
+### 2. Se conectó la publicación con las operaciones de API
+
+- `backend/app/routes/flights.py`: después de obtener el resultado de la
+  búsqueda, construye y encola un `search_performed`. No espera la respuesta
+  de Kinesis antes de responder al usuario.
+- `backend/app/routes/reservations.py`: al crear una reserva, confirma la
+  transacción PostgreSQL y después publica `reservation_created`. La
+  cancelación bloquea/actualiza la reserva, confirma el cambio y publica
+  `reservation_cancelled`.
+- `/reservations/{id}/cancel`: la primera cancelación responde 200, una
+  reserva desconocida responde 404 y una ya cancelada responde 409. La
+  disponibilidad se calcula con reservas cuyo estado es `CONFIRMED`, por lo
+  que una cancelación libera el asiento.
+
+`EventPublisher` usa `put_record` con una partition key explícita. El productor
+configura timeout de conexión/lectura mediante `KINESIS_PUBLISH_TIMEOUT_SECONDS`
+(por defecto 1 segundo), dos intentos máximos del SDK y un pool de workers. Las
+reservas/cancelaciones esperan brevemente (0,2 s); si el envío sigue pendiente,
+continúa en background. La búsqueda no espera.
+
+**Límite de fiabilidad que debe explicarse:** la cola de `ThreadPoolExecutor`
+vive en memoria. Una caída del proceso puede perder eventos que todavía no se
+publicaron; los errores del envío se registran en los logs. Esto es una
+solución de laboratorio, no una garantía transaccional de producción. Para
+evitar perder una reserva entre el `COMMIT` de PostgreSQL y Kinesis, una
+solución de producción guardaría una fila de outbox en la misma transacción y
+un dispatcher idempotente la publicaría con reintentos.
+
+### 3. Se implementó el consumidor de la vista rápida
+
+`backend/app/live_view.py` inicia `KinesisLiveConsumer` en el startup de
+FastAPI. Usa polling estándar (`ListShards`, `GetShardIterator`,
+`GetRecords`), no Enhanced Fan-Out. Los eventos válidos se insertan en
+`live_stream_events`; `event_id` es clave primaria y los reintentos se
+deduplican con `ON CONFLICT DO NOTHING`. El índice sobre `event_ts` ayuda al
+filtro de ventana y los eventos de más de una hora se limpian periódicamente.
+
+`GET /analytics/live?window=5` acepta ventanas de 1 a 60 minutos. El cálculo
+filtra por `event_ts` entre la hora actual UTC y el límite de la ventana:
+
+```json
+{
+  "window_minutes": 5,
+  "searches": 10,
+  "reservations": 3,
+  "cancellations": 1,
+  "conversion": 0.3
+}
 ```
 
-El publicador crea el evento después de consultar los resultados de búsqueda o
-de confirmar la operación transaccional. En particular, reservas y
-cancelaciones se publican después del `COMMIT` y esperan como máximo 0.2 s por
-la respuesta rápida del publicador; si vence ese tiempo, el envío continúa en
-background. Las búsquedas se encolan sin esperar, para no penalizar el camino
-de alta frecuencia. Los errores asíncronos se escriben en el log del backend;
-las llamadas AWS tienen timeout configurable mediante
-`KINESIS_PUBLISH_TIMEOUT_SECONDS`.
+La conversión usa reservas creadas / búsquedas, y devuelve cero si no hay
+búsquedas. Esta ruta rápida consulta PostgreSQL operacional, no Athena. La
+consulta analítica del esquema en estrella es otra ruta y pertenece a Persona
+B.
 
-La cola en memoria satisface el camino de demostración, pero no es un outbox
-durable: un cierre abrupto del proceso puede perder eventos que aún no se
-enviaron. Para producción, se recomienda insertar una fila de outbox en la
-misma transacción de la reserva/cancelación y publicar desde un dispatcher
-idempotente; esto evita la ventana entre el commit de PostgreSQL y el envío a
-Kinesis.
+### 4. Se conectó la operación de refresh con Glue
 
-## Contrato de eventos
+`backend/app/routes/admin.py` expone `POST /admin/refresh-star` y
+`GET /admin/refresh-status`. `backend/app/star_refresh.py` solicita y consulta
+una ejecución de AWS Glue usando el rol IAM del backend y el nombre
+`GLUE_STAR_JOB_NAME`. El inicio pasa `RAW_EVENTS_URI` y
+`ATHENA_STAR_DATABASE` cuando existen. El estado se traduce a `RUNNING`,
+`SUCCEEDED` o `FAILED`.
 
-Cada registro JSON contiene:
+Esta parte es un adaptador, no el proceso ETL. Para completar R8, Persona B
+debe crear el Glue job, IAM, catálogo y tablas; entonces se verifica que la
+ejecución concluya dentro de 900 segundos. No se debe cambiar el 503 de
+configuración ausente por una respuesta de éxito ficticia.
 
-| Campo | Descripción |
-|---|---|
-| `event_id` | UUID distinto por evento |
-| `event_type` | `search_performed`, `reservation_created` o `reservation_cancelled` |
-| `event_ts` | UTC, formato `YYYY-MM-DDTHH:MM:SSZ`, momento de la acción |
-| `schema_version` | `1` |
+### 5. Se definió la landing zone como servicio de despliegue
 
-| Acción | Datos específicos | Partition key |
-|---|---|---|
-| Búsqueda | `session_id`, origen, destino, fecha de viaje y cantidad de resultados | `session_id` del encabezado `X-Session-Id`; si falta, se genera uno |
-| Reserva | `reservation_id`, `flight_id`, ruta, fecha, clase y precio en centavos | `flight_id` |
-| Cancelación | Mismos campos de la reserva original | `flight_id` |
+La API publica en Kinesis; el repositorio no tiene un escritor propio a S3 ni
+un script de provisionamiento de Firehose. El deployment debe configurar
+Firehose (u otro consumidor de entrega) como destino del stream, escribir JSON
+sin PII en `raw_events_uri` y usar compresión gzip si se desea. Configura el
+buffer de Firehose a no más de 60 segundos para dejar margen al límite R4 de
+300 segundos. La entrega puede repetirse, por lo que Persona B debe deduplicar
+por `event_id`.
 
-No se envía el nombre del pasajero ni otro dato personal. La implementación
-está en `backend/app/events.py`; los puntos de publicación están en
-`backend/app/routes/flights.py` y `backend/app/routes/reservations.py`.
+Comprueba el delivery real con:
 
-## API
+```powershell
+aws firehose describe-delivery-stream --region $env:AWS_REGION `
+  --delivery-stream-name $env:FIREHOSE_NAME
+aws s3 ls $env:RAW_EVENTS_URI --recursive
+```
 
-| Método y ruta | Comportamiento |
-|---|---|
-| `POST /reservations/{id}/cancel` | Devuelve la reserva cancelada con `200`; `404` si no existe; `409` si ya estaba cancelada. El conteo de asientos solo considera reservas confirmadas, por lo que la cancelación libera el asiento. |
-| `GET /analytics/live?window=5` | Devuelve búsquedas, reservas, cancelaciones y `conversion` dentro de una ventana de 1–60 minutos. |
-| `POST /admin/refresh-star` | Inicia el job indicado por `GLUE_STAR_JOB_NAME`, devuelve `202` con el `job_id`; devuelve `503` si el job no está configurado. |
-| `GET /admin/refresh-status` | Traduce el estado de Glue a `RUNNING`, `SUCCEEDED` o `FAILED`. |
+La respuesta debe mostrar Firehose activo, origen Kinesis correcto, destino
+S3 correcto y buffer adecuado. La existencia de objetos en el prefijo no
+demuestra que los 20.000 eventos del replay llegaron: R4 se valida contando
+los `event_id` distintos con el harness.
 
-`/analytics/live` consulta una tabla operacional poblada exclusivamente por el
-consumidor de Kinesis, no por Athena. La consulta compara `event_ts` con la
-hora UTC actual, excluye eventos atrasados fuera de la ventana y calcula la
-conversión como reservas creadas / búsquedas, con cero búsquedas igual a
-`0.0`. El `event_id` es clave primaria para que varios workers no cuenten dos
-veces el mismo registro.
+### 6. Se añadieron scripts de ciclo de vida de Kinesis
 
-El consumidor hace polling estándar (`GetRecords`) y no crea consumidores
-Enhanced Fan-Out. El registro operacional conserva una hora de eventos para
-consultas en vivo y se limpia periódicamente. El índice por `event_ts` acelera
-el filtro temporal.
+- `infra/create_stream.sh` crea el stream si no existe, en modo provisionado
+  con un shard. Si ya existe, verifica que sea `PROVISIONED`, tenga como máximo
+  un shard, retención no mayor de 24 horas y cero consumidores EFO.
+- `infra/delete_stream.sh` requiere `DELETE_STREAM_CONFIRM=yes` y espera a
+  que AWS confirme el borrado.
 
-## Landing zone
+Los scripts no modifican un stream existente que no cumpla el perfil: fallan
+con un mensaje explícito. Ejecútalos con Git Bash, WSL o CloudShell y fija
+`AWS_REGION` y `STREAM_NAME` de manera que coincidan exactamente con
+`parcial3-harness-estudiantes/config.yaml`.
 
-La cuenta ya dispone de un Kinesis Data Stream y un Firehose con origen en ese
-stream y destino en un bucket S3. Firehose escribe eventos comprimidos en
-`s3://taller-kinesis-636683574371-20261111/sensores/`. El objeto existente en
-esa ruta termina en `.gz`; el harness del parcial 3 descomprime gzip al leer.
-La configuración de buffer observada es **1 MB o 60 segundos**, lo que ocurra
-primero. Por eso el objetivo de entrega de cinco minutos deja margen para
-entrega y polling de S3.
+### 7. Se fijó la semilla del equipo
 
-Firehose ofrece una landing administrada sin código de escritura S3. El costo
-es una latencia por buffering y los cargos de Firehose/S3; para el volumen
-pequeño del laboratorio resulta más simple que mantener un escritor propio.
-La entrega puede repetirse, por lo que el ETL de la parte B debe deduplicar por
-`event_id`.
+La semilla correcta es **6089**:
 
-## Validación de AWS y requisitos
+- `parcial3-harness-estudiantes/config.yaml` ya especifica `seed: 6089`.
+- Se corrigieron `parcial3-harness-estudiantes/config.example.yaml` y el
+  ejemplo de uso en `airline_data/generate_p3.py` para que coincidan con ella.
+- Generación de referencias:
 
-AWS CLI se comprobó con `aws sts get-caller-identity`: la sesión está
-autenticada en la cuenta `636683574371`, rol temporal `voclabs`, región
-`us-east-1`. El backend respondió `200` en `/health` en la instancia EC2
-`i-042430a53734dacab`.
+```powershell
+Set-Location C:\Users\User\Desktop\airline-project\parcial3-harness-estudiantes
+python -m airline_data.generate_p3 --seed 6089 --out ref/
+```
 
-Lectura AWS verificada antes de esta implementación:
+El harness y la generación de referencias deben usar la misma semilla para
+que los datos de referencia correspondan al equipo.
 
-| Requisito | Estado | Evidencia |
-|---|---|---|
-| R1 | Validado | Harness: 30/30 búsquedas y 4/4 eventos de 3 reservas más 1 cancelación; esquema, particiones, `event_ts` y ausencia de PII pasaron. |
-| R2 | Validado | Harness: 200/200 eventos, HTTP 200 y p95 de 0.749 s con concurrencia 50 (límite: 1 s). |
-| R3 | Validado | Harness: deltas de 10 búsquedas, 3 reservas y 1 cancelación; conversión correcta. Tras reproducir 17,000 eventos antiguos, la vista mostró 240 búsquedas, debajo del límite de 1,700. |
-| R4 | Validado | Firehose `ACTIVE`, buffer 1 MB/60 s; el harness encontró 19,912/19,912 eventos distintos en S3 tras 61 s (límite: 300 s). |
-| R11 | Validado | Harness: stream `PROVISIONED`, 1 shard, 24 h de retención, 0 consumidores EFO. |
-| Refresh star | Integración preparada | Las rutas delegan a Glue; actualmente la cuenta no contiene un Glue job, por lo que no se afirma que el refresh ETL funcione. |
+## Cómo comprobar cada requisito con AWS CLI
 
-La ejecución parcial de `tests/test_1_stream.py` y `test_stream_is_minimal`
-terminó con **6 passed**. Los requisitos de Persona A suman **27/27 puntos**
-verificados; el informe global muestra 27/70 porque R5–R10 y R12 no forman
-parte de esta selección. Se corrigió además el nombre de la columna de vuelos
-para coincidir con el esquema PostgreSQL real (`price_cents`). Los dos workers
-de Uvicorn serializan el DDL de inicialización y las escrituras por lote con
-locks transaccionales de PostgreSQL; en la validación final ambos iniciaron
-correctamente y no se registraron deadlocks.
-
-Los endpoints de cancelación respondieron `200` al cancelar, `404` para un
-UUID válido inexistente y `409` al cancelar de nuevo una reserva cancelada.
-`GET /admin/refresh-status` respondió `200`; `POST /admin/refresh-star`
-respondió `503` de forma explícita porque aún no existe/configuraron el Glue
-job de la parte B.
-
-No se eliminaron recursos AWS durante esta implementación porque el stream,
-Firehose y el bucket de landing son necesarios para R1–R4. Tampoco se borraron
-archivos existentes del proyecto. El ZIP temporal de despliegue se eliminará
-tras terminar la validación. Ambos scripts pasaron `bash -n`; `create_stream.sh`
-se ejecutó idempotentemente contra el stream existente y confirmó su perfil
-mínimo. `delete_stream.sh` no se ejecutó porque borraría el stream requerido
-por la API y Firehose; úsalo solo cuando el equipo ya no necesite esta parte.
-
-## Ciclo de vida y costos
-
-`infra/create_stream.sh` crea el stream solo si no existe, en modo provisionado
-con un shard; la retención predeterminada es 24 horas. No registra consumidores
-EFO. `infra/delete_stream.sh` elimina únicamente el stream indicado mediante
-`STREAM_NAME` y requiere `DELETE_STREAM_CONFIRM=yes` para reducir el riesgo de
-borrado accidental.
-
-La proyección en `cost_projection.yaml` incluye Kinesis, S3 y Athena. La línea
-de Kinesis estima 200 horas de uso al mes usando la tarifa ilustrativa de
-$0.015 por shard-hora que figura en
-`parcial3-harness-estudiantes/pricing.yaml`, equivalente a $3.00. Si se
-confirma esa tarifa y el shard permanece activo durante 730 horas, el costo de
-shard-hora sería aproximadamente $10.95, antes del volumen de escrituras y de
-otros cargos. El propio archivo marca esos precios como ilustrativos y no
-verificados. Verifica los precios vigentes con la
-[página oficial de precios de Kinesis Data Streams](https://aws.amazon.com/kinesis/data-streams/pricing/)
-o AWS Pricing Calculator. Si se suspende el trabajo, elimina el stream solo
-después de detener los consumidores que lo necesitan y confirmar que no se
-requiere la landing zone; no lo borres durante la validación de R1–R4.
-
-Esto prioriza los pilares Well-Architected de **Performance Efficiency**
-(consumo de eventos en segundos), **Reliability** (partition keys por clave
-de negocio, reintentos SDK y deduplicación en la vista), **Security**
-(sin PII en el stream y sin credenciales estáticas), **Cost Optimization**
-(un shard, sin EFO, Firehose existente) y **Sustainability** (recursos
-temporales eliminables y retención predeterminada).
-
-## Comandos
-
-Verificar sesión:
+### Identidad y región
 
 ```powershell
 aws sts get-caller-identity
-aws kinesis describe-stream-summary --stream-name taller-kinesis-sensores-636683574371
-aws firehose describe-delivery-stream --delivery-stream-name taller-kinesis-firehose-636683574371
+aws configure list
 ```
 
-Crear o validar el stream:
+Confirma que las credenciales temporales estén vigentes, y que cuenta/región
+sean las esperadas antes de consultar o modificar recursos.
 
-```bash
-STREAM_NAME=taller-kinesis-sensores-636683574371 AWS_REGION=us-east-1 bash infra/create_stream.sh
-```
-
-Ejecutar pruebas unitarias nuevas:
+### R11: configuración mínima del stream
 
 ```powershell
-cd C:\Users\josen\OneDrive\Desktop\airline-project\backend
-python -m pytest tests/test_partial3_events.py -q
+aws kinesis describe-stream-summary --region $env:AWS_REGION `
+  --stream-name $env:STREAM_NAME `
+  --query "StreamDescriptionSummary.{Status:StreamStatus,Mode:StreamModeDetails.StreamMode,Shards:OpenShardCount,RetentionHours:RetentionPeriodHours,Consumers:ConsumerCount}" `
+  --output table
+aws kinesis list-shards --region $env:AWS_REGION `
+  --stream-name $env:STREAM_NAME --output table
 ```
 
-Ejecutar únicamente R1–R4 y R11 del harness del parcial 3:
+El resultado esperado es `ACTIVE`, `PROVISIONED`, un shard abierto, retención
+menor o igual a 24 horas y `Consumers = 0`. El harness R11 es la comprobación
+reproducible final.
+
+### R1 y R2: registros de Kinesis
+
+1. Envía búsqueda, reserva y cancelación por API, anotando `X-Session-Id`,
+   `reservation_id` y hora UTC.
+2. Usa `list-shards`, `get-shard-iterator` con
+   `--shard-iterator-type AT_TIMESTAMP` y `get-records` para leer el stream.
+3. Decodifica `Records[].Data` de Base64 a UTF-8/JSON y comprueba:
+   `event_type`, `event_ts`, `schema_version`, campos obligatorios,
+   partition key, ID único y ausencia de `passenger_name`.
+4. Para R2, el harness envía 200 búsquedas en concurrencia 50 y mide p95; el
+   criterio es p95 máximo de 1 segundo y 200 eventos.
+
+La sección de lectura de stream en
+[la guía de consola](./GUIA-EJECUCION-PARCIAL3-CONSOLA.md) incluye el bloque
+PowerShell que decodifica `Data`. `GetRecords` puede requerir varias páginas.
+
+### R3: ventana de la vista en vivo
 
 ```powershell
-cd C:\Users\josen\OneDrive\Desktop\airline-project\parcial3-harness-estudiantes
-python -m pytest tests/test_1_stream.py tests/test_3_cost.py -k "not test_projection" -q
+Invoke-RestMethod "$env:BACKEND_URL/analytics/live?window=5"
 ```
 
-El harness inyecta hasta 20,000 registros en Kinesis y genera objetos en S3;
-ejecútalo solo contra recursos propios y espera a que R4 termine. Los registros
-del stream expiran según su retención de 24 horas.
+Compara la respuesta antes y después de emitir acciones. Debe aumentar dentro
+de 10 segundos por eventos actuales; un replay con fechas antiguas no debe
+contarse como actividad reciente. El harness verifica ambos casos y la
+conversión.
+
+### R4: entrega a S3
+
+```powershell
+aws firehose describe-delivery-stream --region $env:AWS_REGION `
+  --delivery-stream-name $env:FIREHOSE_NAME
+aws s3 ls $env:RAW_EVENTS_URI --recursive
+```
+
+Descarga un objeto `.gz` representativo y busca un `event_id` tras
+descomprimirlo. Para el criterio de aceptación, ejecuta R4 del harness: debe
+encontrar todos los IDs distintos del replay en no más de 300 segundos.
+
+## Pruebas y estado verificable
+
+Pruebas unitarias locales de Persona A:
+
+```powershell
+Set-Location C:\Users\User\Desktop\airline-project\backend
+$env:DB_POOL_MIN = "0"
+$env:DB_POOL_MAX = "1"
+python -m pytest tests\test_partial3_events.py -q
+```
+
+Pruebas AWS de R1–R4 y R11:
+
+```powershell
+Set-Location C:\Users\User\Desktop\airline-project\parcial3-harness-estudiantes
+python -m pytest tests\test_1_stream.py tests\test_3_cost.py -k "not test_projection" -q
+```
+
+El harness puede emitir eventos y crear objetos en tu cuenta; ejecútalo solo
+contra recursos propios. Guarda `report.md` y `report.json`. R12 se ejecuta
+aparte o quitando el filtro anterior. R8 no queda aprobado hasta que Persona B
+entregue y despliegue el Glue job.
+
+Las pruebas unitarias en `backend/tests/test_partial3_events.py` cubren la
+construcción de eventos, keys, publicación JSON, parseo de `event_ts` y
+cálculo de métricas. El resultado actual de esas pruebas y de las pruebas AWS
+debe informarse a partir de una ejecución reciente, no de números copiados de
+un informe antiguo.
+
+## Pilares Well-Architected
+
+- **Performance Efficiency (R2–R3):** publicación fuera de la ruta síncrona de
+  búsquedas y contadores operacionales directamente desde el stream.
+- **Reliability (R1–R4):** IDs de evento, partition keys de negocio, reintentos
+  del SDK y deduplicación del consumidor; la cola en memoria no es durable y
+  se documenta como limitación.
+- **Security:** se excluyen datos personales de los eventos y se usan roles/
+  credenciales estándar AWS, no claves codificadas en el repositorio.
+- **Cost Optimization / Sustainability (R11):** un shard provisionado, sin
+  Enhanced Fan-Out, retención por defecto y eliminación explícita del stream
+  al finalizar las pruebas.
+
+## Referencias
+
+- [Contrato de eventos](./CONTRATO.md)
+- [Guía de ejecución desde consola](./GUIA-EJECUCION-PARCIAL3-CONSOLA.md)
+- [Contrato del harness parcial 3](../parcial3-harness-estudiantes/contract/EVENTS.md)
+- [Harness parcial 3](../parcial3-harness-estudiantes/README.md)

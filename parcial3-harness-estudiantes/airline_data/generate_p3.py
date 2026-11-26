@@ -1,4 +1,4 @@
-"""python -m airline_data.generate_p3 --seed 417 --out ref/   (writes routes_ref.csv, route_category_history.csv and holidays_ref.csv)"""
+"""python -m airline_data.generate_p3 --seed 6089 --out ref/   (writes routes_ref.csv, route_category_history.csv and holidays_ref.csv)"""
 import argparse
 
 from .events import write_reference_files

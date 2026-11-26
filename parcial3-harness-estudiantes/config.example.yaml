@@ -1,7 +1,7 @@
 # Copy to config.yaml and fill it in. Do NOT commit credentials; the harness uses your normal
 # AWS credentials (environment variables / ~/.aws), exactly like the AWS CLI.
 team_id: "team01"
-seed: 417                # the 3-digit seed assigned to your team (changes your events AND the expected answers)
+seed: 6089                # seed assigned to this team; keep it consistent with the reference data
 
 backend:
   base_url: "http://YOUR-EC2-IP:8000"
