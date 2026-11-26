@@ -4,8 +4,14 @@ import time
 
 from fastapi import APIRouter, HTTPException, Query
 from app.db import get_connection, release_connection
+from app.live_view import live_metrics
 
 router = APIRouter()
+
+
+@router.get("/analytics/live")
+def live_analytics(window: int = Query(5, ge=1, le=60)):
+    return live_metrics(window)
 
 
 def _athena_occupancy(route: str, month: str):

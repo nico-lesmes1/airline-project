@@ -28,8 +28,8 @@ contra una tabla de métricas en Amazon Athena.
 | `GET` | `/analytics/occupancy?route=BOG-MDE&month=YYYY-MM` | Ocupación, vendidos y capacidad |
 
 Los endpoints de vuelos devuelven `price_cents`, tal como exige el contrato del
-parcial. La columna física heredada de PostgreSQL se llama `price_cent`; la API
-la expone con el nombre contractual.
+parcial. La API y la base de datos usan ese mismo nombre; las solicitudes
+heredadas con `price_cent` siguen aceptándose como compatibilidad de entrada.
 
 ## Estructura
 
@@ -225,6 +225,34 @@ Athena en producción y devuelve 404 para rutas sin datos.
 La validación final ejecutada con el harness fue **23 passed, 70.0/70.0**.
 El informe generado está en
 [parcial2-harness-estudiantes/parcial2-harness/report.md](parcial2-harness-estudiantes/parcial2-harness/report.md).
+
+## Parcial 3 — Persona A: eventos y vista en tiempo real
+
+Se añadió al backend el contrato de eventos de Kinesis, publicación de
+búsquedas, reservas y cancelaciones, un consumidor de polling para las métricas
+en vivo, cancelación de reservas y el adaptador de API para solicitar/consultar
+la ejecución del job Glue que construye el star schema.
+
+La implementación detallada, las decisiones de diseño, los comandos de
+verificación AWS y el estado de cada requisito están documentados en
+[docs/README_PARCIAL3_PERSONA_A.md](docs/README_PARCIAL3_PERSONA_A.md).
+
+La configuración local del harness está en
+[parcial3-harness-estudiantes/config.yaml](parcial3-harness-estudiantes/config.yaml).
+No contiene claves AWS; usa las credenciales estándar de AWS CLI y el rol de la
+instancia. El stream existente es provisionado, de un shard, retención de 24
+horas y sin Enhanced Fan-Out; Firehose entrega los eventos comprimidos a S3
+con un intervalo de buffer de 60 segundos.
+
+La validación de Persona A pasó **6 pruebas** del harness: R1–R4 y R11
+(**27/27 puntos de este alcance**). R2 registró p95 de 0.749 s para 200
+búsquedas concurrentes; R4 entregó los 19,912 eventos de replay a S3 en 61 s.
+R5–R10 y R12 quedan fuera de esta parte.
+
+**Límite de alcance:** el endpoint de refresh inicia un Glue job configurado
+por `GLUE_STAR_JOB_NAME`. La cuenta actualmente no tiene ese job; su ETL y el
+star schema corresponden a la siguiente parte. Por eso R5–R10 no se
+consideran validados aquí.
 
 ## Costos
 

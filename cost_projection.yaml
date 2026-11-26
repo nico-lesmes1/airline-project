@@ -12,6 +12,9 @@ line_items:
   - service: "Athena"
     detail: "Consultas del panel sobre Parquet"
     monthly_usd: 0.01
+  - service: "Kinesis"
+    detail: "Un shard provisionado; 200 horas de pruebas al mes (0.015 USD/shard-hora)"
+    monthly_usd: 3.00
   - service: "EMR"
     detail: "Una ejecución mensual con 3 x m4.large, 12 normalized instance-hours y terminación automática"
     monthly_usd: 0.36

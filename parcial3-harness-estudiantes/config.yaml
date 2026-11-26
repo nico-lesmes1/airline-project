@@ -1,0 +1,15 @@
+team_id: "team01"
+seed: 417
+
+backend:
+  base_url: "http://32.199.161.18:8000"
+
+aws:
+  region: us-east-1
+  kinesis_stream: taller-kinesis-sensores-636683574371
+  raw_events_uri: "s3://taller-kinesis-636683574371-20261111/sensores/"
+  athena_workgroup: primary
+  athena_database: airline_star
+  athena_output: "s3://taller-kinesis-636683574371-20261111/athena-results/"
+
+cost_projection_file: ../cost_projection.yaml

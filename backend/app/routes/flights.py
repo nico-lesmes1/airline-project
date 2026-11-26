@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query
 from typing import List, Optional
 from datetime import date
+from uuid import uuid4
 from app.db import get_connection, release_connection
+from app.events import publisher, search_event
 from app.models import FlightAvailableOut, FlightSearchOut
 
 router = APIRouter()
@@ -22,7 +24,7 @@ def available_flights(
                    f.route,
                    f.flight_date,
                    f.capacity - COALESCE(r.sold, 0) AS seats_available,
-                   f.price_cent AS price_cents
+                   f.price_cents
             FROM flights f
             LEFT JOIN (
                 SELECT flight_id, COUNT(*) AS sold
@@ -32,7 +34,7 @@ def available_flights(
             ) r ON r.flight_id = f.flight_id
             WHERE f.flight_date >= COALESCE(%s, CURRENT_DATE)
               AND f.capacity - COALESCE(r.sold, 0) > 0
-            ORDER BY f.flight_date ASC, f.price_cent ASC
+            ORDER BY f.flight_date ASC, f.price_cents ASC
             LIMIT %s
             """,
             (from_date, limit),
@@ -49,6 +51,7 @@ def search_flights(
     origin: str = Query(...),
     destination: str = Query(...),
     date: date = Query(...),
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
 ):
     # Construir la ruta en el mismo formato que usa la BD: "ORIGEN-DESTINO"
     route = f"{origin.upper()}-{destination.upper()}"
@@ -62,21 +65,29 @@ def search_flights(
                    f.route,
                    f.flight_date,
                    f.capacity - COALESCE(COUNT(r.reservation_id), 0) AS seats_available,
-                   f.price_cent AS price_cents
+                   f.price_cents
             FROM flights f
             LEFT JOIN reservations r
               ON r.flight_id = f.flight_id
              AND r.status = 'CONFIRMED'
             WHERE f.route = %s
               AND f.flight_date = %s
-            GROUP BY f.flight_id, f.route, f.flight_date, f.capacity, f.price_cent
+            GROUP BY f.flight_id, f.route, f.flight_date, f.capacity, f.price_cents
             HAVING f.capacity - COALESCE(COUNT(r.reservation_id), 0) > 0
-            ORDER BY f.price_cent ASC
+            ORDER BY f.price_cents ASC
             """,
             (route, date),
         )
         rows = cur.fetchall()
         cur.close()
+        event, partition_key = search_event(
+            origin=origin,
+            destination=destination,
+            travel_date=date,
+            results_count=len(rows),
+            session_id=x_session_id or str(uuid4()),
+        )
+        publisher.publish(event, partition_key)
         return rows
     finally:
         release_connection(conn)

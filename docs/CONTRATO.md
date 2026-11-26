@@ -36,7 +36,7 @@ Response 200: {"status": "ok"}
 
 ## 2. Esquema BD transaccional (A)
 
-flights(flight_id VARCHAR PK, route VARCHAR, flight_date DATE, capacity INT, price_cent BIGINT)
+flights(flight_id VARCHAR PK, route VARCHAR, flight_date DATE, capacity INT, price_cents BIGINT)
 reservations(reservation_id UUID PK, flight_id VARCHAR FK, passenger_name VARCHAR,
              fare_class VARCHAR, status VARCHAR DEFAULT 'CONFIRMED', created_at TIMESTAMP)
 
